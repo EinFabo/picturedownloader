@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Bilddownloader</title>
+    <!-- JSZip Bibliothek einbinden -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        /* Moderne und benutzerfreundliche Styles */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        input[type="url"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="url"]:focus {
+            border-color: #3498db;
+            outline: none;
+        }
+
+        .checkbox-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        button {
+            background-color: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+
+        .error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+
+        .success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        /* Loading Animation */
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Website Bilddownloader</h1>
+        
+        <form id="downloadForm">
+            <div class="form-group">
+                <label for="url">Website URL:</label>
+                <input type="url" id="url" name="url" required 
+                       placeholder="https://beispiel.de">
+            </div>
+
+            <div class="form-group">
+                <label>Bildformate auswählen:</label>
+                <div class="checkbox-group">
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="jpg" name="formats" value=".jpg" checked>
+                        <label for="jpg">JPG</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="jpeg" name="formats" value=".jpeg">
+                        <label for="jpeg">JPEG</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="png" name="formats" value=".png" checked>
+                        <label for="png">PNG</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="gif" name="formats" value=".gif">
+                        <label for="gif">GIF</label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="webp" name="formats" value=".webp">
+                        <label for="webp">WebP</label>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit">Bilder herunterladen</button>
+        </form>
+
+        <div id="status"></div>
+        <div class="loading" id="loading"></div>
+    </div>
+
+    <script>
+        // CORS Proxy URL (für Zugriff auf externe Websites)
+        const CORS_PROXY = 'https://corsproxy.io/?';
+
+        async function fetchImages(url, formats) {
+            try {
+                // HTML der Zielseite abrufen
+                const response = await fetch(CORS_PROXY + encodeURIComponent(url));
+                if (!response.ok) {
+                    throw new Error('Fehler beim Abrufen der Website');
+                }
+                const html = await response.text();
+                
+                // HTML parsen
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                
+                // Alle Bilder finden
+                const images = doc.getElementsByTagName('img');
+                const imageUrls = new Set(); // Verwende Set für eindeutige URLs
+                
+                // Bilder filtern nach Format
+                for (const img of images) {
+                    const imgUrl = img.src || img.getAttribute('src');
+                    if (imgUrl) {
+                        try {
+                            const absoluteUrl = new URL(imgUrl, url).href;
+                            if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
+                                imageUrls.add(absoluteUrl);
+                            }
+                        } catch (error) {
+                            console.warn('Ungültige Bild-URL:', imgUrl);
+                        }
+                    }
+                }
+                
+                return Array.from(imageUrls);
+            } catch (error) {
+                throw new Error('Fehler beim Laden der Website: ' + error.message);
+            }
+        }
+
+        async function downloadImages(imageUrls) {
+            const zip = new JSZip();
+            const errors = [];
+            
+            // Bilder herunterladen und zum ZIP hinzufügen
+            for (let i = 0; i < imageUrls.length; i++) {
+                try {
+                    const url = imageUrls[i];
+                    const response = await fetch(CORS_PROXY + encodeURIComponent(url));
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const blob = await response.blob();
+                    
+                    // Dateiname aus URL extrahieren und säubern
+                    let fileName = url.split('/').pop() || `image_${i + 1}${getExtension(url)}`;
+                    fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_'); // Ungültige Zeichen ersetzen
+                    
+                    zip.file(fileName, blob);
+                } catch (error) {
+                    console.error(`Fehler beim Download von ${imageUrls[i]}:`, error);
+                    errors.push(imageUrls[i]);
+                }
+            }
+            
+            return { zip, errors };
+        }
+
+        function getExtension(url) {
+            const match = url.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+            return match ? match[0] : '.jpg';
+        }
+
+        document.getElementById('downloadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const form = e.target;
+            const url = form.url.value;
+            const statusDiv = document.getElementById('status');
+            const loadingDiv = document.getElementById('loading');
+            const formats = Array.from(form.formats)
+                                .filter(cb => cb.checked)
+                                .map(cb => cb.value);
+            
+            if (formats.length === 0) {
+                statusDiv.textContent = 'Bitte wählen Sie mindestens ein Bildformat aus.';
+                statusDiv.className = 'error';
+                statusDiv.style.display = 'block';
+                return;
+            }
+
+            // UI-Status aktualisieren
+            statusDiv.style.display = 'none';
+            loadingDiv.style.display = 'block';
+            
+            try {
+                // Bilder von der Website abrufen
+                const imageUrls = await fetchImages(url, formats);
+                
+                if (imageUrls.length === 0) {
+                    throw new Error('Keine Bilder mit den ausgewählten Formaten gefunden');
+                }
+
+                // ZIP-Datei erstellen
+                const { zip, errors } = await downloadImages(imageUrls);
+                const blob = await zip.generateAsync({type: 'blob'});
+                
+                // Download starten
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = 'downloaded_images.zip';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                a.remove();
+
+                let message = `Download erfolgreich! ${imageUrls.length - errors.length} Bilder heruntergeladen.`;
+                if (errors.length > 0) {
+                    message += ` (${errors.length} Bilder konnten nicht heruntergeladen werden)`;
+                }
+                statusDiv.textContent = message;
+                statusDiv.className = errors.length > 0 ? 'warning' : 'success';
+            } catch (error) {
+                console.error('Fehler:', error);
+                statusDiv.textContent = error.message || 'Ein Fehler ist aufgetreten.';
+                statusDiv.className = 'error';
+            } finally {
+                loadingDiv.style.display = 'none';
+                statusDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html> 
