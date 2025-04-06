@@ -172,27 +172,43 @@
     </div>
 
     <script>
-        // CORS Proxy URL (für Zugriff auf externe Websites)
-        const CORS_PROXY = 'https://corsproxy.io/?';
+        // Alternative CORS Proxies
+        const CORS_PROXIES = [
+            'https://api.allorigins.win/raw?url=',
+            'https://corsproxy.io/?',
+            'https://cors-anywhere.herokuapp.com/'
+        ];
+
+        async function tryFetch(url) {
+            for (const proxy of CORS_PROXIES) {
+                try {
+                    const response = await fetch(proxy + encodeURIComponent(url));
+                    if (response.ok) {
+                        return response;
+                    }
+                } catch (error) {
+                    console.warn(`Proxy ${proxy} fehlgeschlagen:`, error);
+                    continue;
+                }
+            }
+            throw new Error('Keine der Proxy-Verbindungen war erfolgreich. Bitte versuchen Sie es später erneut.');
+        }
 
         async function fetchImages(url, formats) {
             try {
                 // HTML der Zielseite abrufen
-                const response = await fetch(CORS_PROXY + encodeURIComponent(url));
-                if (!response.ok) {
-                    throw new Error('Fehler beim Abrufen der Website');
-                }
+                const response = await tryFetch(url);
                 const html = await response.text();
                 
                 // HTML parsen
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, 'text/html');
                 
-                // Alle Bilder finden
-                const images = doc.getElementsByTagName('img');
-                const imageUrls = new Set(); // Verwende Set für eindeutige URLs
+                // Alle Bilder und Hintergrundbilder finden
+                const imageUrls = new Set();
                 
-                // Bilder filtern nach Format
+                // <img> Tags durchsuchen
+                const images = doc.getElementsByTagName('img');
                 for (const img of images) {
                     const imgUrl = img.src || img.getAttribute('src');
                     if (imgUrl) {
@@ -206,39 +222,75 @@
                         }
                     }
                 }
+
+                // CSS Hintergrundbilder suchen
+                const elements = doc.getElementsByTagName('*');
+                for (const element of elements) {
+                    const style = window.getComputedStyle(element);
+                    const backgroundImage = style.backgroundImage;
+                    if (backgroundImage && backgroundImage !== 'none') {
+                        const matches = backgroundImage.match(/url\(['"]?(.*?)['"]?\)/);
+                        if (matches && matches[1]) {
+                            try {
+                                const absoluteUrl = new URL(matches[1], url).href;
+                                if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
+                                    imageUrls.add(absoluteUrl);
+                                }
+                            } catch (error) {
+                                console.warn('Ungültige Hintergrundbild-URL:', matches[1]);
+                            }
+                        }
+                    }
+                }
+                
+                if (imageUrls.size === 0) {
+                    throw new Error('Keine Bilder mit den ausgewählten Formaten auf der Website gefunden.');
+                }
                 
                 return Array.from(imageUrls);
             } catch (error) {
-                throw new Error('Fehler beim Laden der Website: ' + error.message);
+                if (error.message.includes('Keine Bilder')) {
+                    throw error;
+                }
+                throw new Error('Fehler beim Laden der Website. Bitte überprüfen Sie die URL und versuchen Sie es erneut.');
             }
         }
 
         async function downloadImages(imageUrls) {
             const zip = new JSZip();
             const errors = [];
+            let successCount = 0;
+            
+            // Fortschrittsanzeige erstellen
+            const progressDiv = document.createElement('div');
+            progressDiv.style.marginTop = '10px';
+            document.getElementById('status').after(progressDiv);
             
             // Bilder herunterladen und zum ZIP hinzufügen
             for (let i = 0; i < imageUrls.length; i++) {
                 try {
                     const url = imageUrls[i];
-                    const response = await fetch(CORS_PROXY + encodeURIComponent(url));
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
+                    progressDiv.textContent = `Lade Bild ${i + 1} von ${imageUrls.length}...`;
+                    
+                    const response = await tryFetch(url);
                     const blob = await response.blob();
                     
                     // Dateiname aus URL extrahieren und säubern
                     let fileName = url.split('/').pop() || `image_${i + 1}${getExtension(url)}`;
-                    fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_'); // Ungültige Zeichen ersetzen
+                    fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
                     
                     zip.file(fileName, blob);
+                    successCount++;
                 } catch (error) {
                     console.error(`Fehler beim Download von ${imageUrls[i]}:`, error);
                     errors.push(imageUrls[i]);
                 }
             }
             
-            return { zip, errors };
+            // Fortschrittsanzeige entfernen
+            progressDiv.remove();
+            
+            return { zip, errors, successCount };
         }
 
         function getExtension(url) {
@@ -272,12 +324,13 @@
                 // Bilder von der Website abrufen
                 const imageUrls = await fetchImages(url, formats);
                 
-                if (imageUrls.length === 0) {
-                    throw new Error('Keine Bilder mit den ausgewählten Formaten gefunden');
-                }
-
                 // ZIP-Datei erstellen
-                const { zip, errors } = await downloadImages(imageUrls);
+                const { zip, errors, successCount } = await downloadImages(imageUrls);
+                
+                if (successCount === 0) {
+                    throw new Error('Keine Bilder konnten heruntergeladen werden.');
+                }
+                
                 const blob = await zip.generateAsync({type: 'blob'});
                 
                 // Download starten
@@ -290,7 +343,7 @@
                 window.URL.revokeObjectURL(downloadUrl);
                 a.remove();
 
-                let message = `Download erfolgreich! ${imageUrls.length - errors.length} Bilder heruntergeladen.`;
+                let message = `Download erfolgreich! ${successCount} Bilder heruntergeladen.`;
                 if (errors.length > 0) {
                     message += ` (${errors.length} Bilder konnten nicht heruntergeladen werden)`;
                 }
@@ -298,7 +351,7 @@
                 statusDiv.className = errors.length > 0 ? 'warning' : 'success';
             } catch (error) {
                 console.error('Fehler:', error);
-                statusDiv.textContent = error.message || 'Ein Fehler ist aufgetreten.';
+                statusDiv.textContent = error.message;
                 statusDiv.className = 'error';
             } finally {
                 loadingDiv.style.display = 'none';
