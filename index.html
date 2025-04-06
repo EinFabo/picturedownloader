@@ -209,17 +209,23 @@
                 
                 // Erweiterte Bildsuche für verschiedene Bildquellen
                 const patterns = [
+                    // Standard Bild-Tags mit Source Sets (für WebP)
+                    /<source[^>]+srcset=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["'][^>]*>/gi,
+                    // Picture Elements für WebP
+                    /<picture[^>]*>.*?<source[^>]+srcset=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["'][^>]*>.*?<\/picture>/gis,
                     // Standard Bild-Tags
                     /(?:src|href|content)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
                     // Data-Attribute (häufig bei Fandom/Wiki-Seiten)
-                    /data-(?:src|image|thumb|file)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
+                    /data-(?:src|image|thumb|file|webp|original)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
                     // Fandom-spezifische Bildquellen
                     /data-image-key=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
                     // CSS Hintergrundbilder
-                    /url\(['"]?([^'"]+\.(?:jpg|jpeg|png|gif|webp))['"]?\)/gi
+                    /url\(['"]?([^'"]+\.(?:jpg|jpeg|png|gif|webp))['"]?\)/gi,
+                    // Srcset Attribute
+                    /srcset=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))\s+\d+w["']/gi
                 ];
 
-                const htmlText = html.toLowerCase();
+                const htmlText = html;
                 
                 // Alle Bildmuster durchsuchen
                 for (const pattern of patterns) {
@@ -233,8 +239,11 @@
                                 imageUrl = 'https:' + imageUrl;
                             }
                             
+                            // Entferne Query-Parameter für Formatprüfung
+                            const urlForCheck = imageUrl.split('?')[0];
+                            
                             const absoluteUrl = new URL(imageUrl, url).href;
-                            if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
+                            if (formats.some(format => urlForCheck.toLowerCase().endsWith(format.toLowerCase()))) {
                                 // Qualitätsverbesserung für Fandom-Bilder
                                 if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
                                     // Größere Bildversion anfordern
@@ -250,20 +259,54 @@
                     }
                 }
 
+                // Zusätzlich nach modernen Bildformaten in source-Tags suchen
+                const sourceTags = doc.querySelectorAll('source');
+                sourceTags.forEach(source => {
+                    try {
+                        const srcset = source.getAttribute('srcset');
+                        const type = source.getAttribute('type');
+                        
+                        if (srcset && type && type.includes('webp') && formats.includes('.webp')) {
+                            srcset.split(',').forEach(src => {
+                                try {
+                                    const url = src.trim().split(' ')[0];
+                                    if (url) {
+                                        const absoluteUrl = new URL(url, window.location.href).href;
+                                        imageUrls.add(absoluteUrl);
+                                    }
+                                } catch (error) {
+                                    console.warn('Fehler beim Verarbeiten von srcset URL:', src);
+                                }
+                            });
+                        }
+                    } catch (error) {
+                        console.warn('Fehler beim Verarbeiten eines source Tags:', error);
+                    }
+                });
+
                 // Zusätzlich nach Fandom-spezifischen Bildcontainern suchen
-                const imageContainers = doc.querySelectorAll('.image, .thumb, .gallery-image');
+                const imageContainers = doc.querySelectorAll('.image, .thumb, .gallery-image, [data-image-key]');
                 imageContainers.forEach(container => {
                     try {
-                        const img = container.querySelector('img');
-                        if (img) {
-                            let imageUrl = img.dataset.src || img.src;
+                        // Suche nach verschiedenen Bildquellen
+                        const sources = [
+                            container.querySelector('img'),
+                            container.querySelector('source'),
+                            container.dataset.imageKey && container
+                        ].filter(Boolean);
+
+                        sources.forEach(element => {
+                            let imageUrl = element.dataset.src || element.src || element.srcset || element.dataset.imageKey;
                             if (imageUrl) {
                                 if (imageUrl.startsWith('//')) {
                                     imageUrl = 'https:' + imageUrl;
                                 }
+                                
+                                // Entferne Query-Parameter für Formatprüfung
+                                const urlForCheck = imageUrl.split('?')[0];
+                                
                                 const absoluteUrl = new URL(imageUrl, url).href;
-                                if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
-                                    // Qualitätsverbesserung für Fandom-Bilder
+                                if (formats.some(format => urlForCheck.toLowerCase().endsWith(format.toLowerCase()))) {
                                     if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
                                         const enhancedUrl = absoluteUrl.replace(/\/scale-to-width-down\/\d+/, '/scale-to-width-down/800');
                                         imageUrls.add(enhancedUrl);
@@ -272,7 +315,7 @@
                                     }
                                 }
                             }
-                        }
+                        });
                     } catch (error) {
                         console.warn('Fehler beim Verarbeiten eines Bildcontainers:', error);
                     }
