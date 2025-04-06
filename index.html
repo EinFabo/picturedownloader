@@ -226,125 +226,132 @@
                 const doc = parser.parseFromString(html, 'text/html');
                 
                 const imageUrls = new Set();
-                
-                // Erweiterte Bildsuche für verschiedene Bildquellen
-                const patterns = [
-                    // Standard Bild-Tags mit Source Sets (für WebP)
-                    /<source[^>]+srcset=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["'][^>]*>/gi,
-                    // Picture Elements für WebP
-                    /<picture[^>]*>.*?<source[^>]+srcset=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["'][^>]*>.*?<\/picture>/gis,
-                    // Standard Bild-Tags
-                    /(?:src|href|content)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
-                    // Data-Attribute (häufig bei Fandom/Wiki-Seiten)
-                    /data-(?:src|image|thumb|file|webp|original)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
-                    // Fandom-spezifische Bildquellen
-                    /data-image-key=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
-                    // CSS Hintergrundbilder
-                    /url\(['"]?([^'"]+\.(?:jpg|jpeg|png|gif|webp))['"]?\)/gi,
-                    // Srcset Attribute
-                    /srcset=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))\s+\d+w["']/gi
-                ];
 
-                const htmlText = html;
-                
-                // Alle Bildmuster durchsuchen
-                for (const pattern of patterns) {
-                    let match;
-                    while ((match = pattern.exec(htmlText)) !== null) {
-                        try {
-                            let imageUrl = match[1];
-                            
-                            // Fandom-spezifische URL-Anpassungen
-                            if (imageUrl.startsWith('//')) {
-                                imageUrl = 'https:' + imageUrl;
-                            }
-                            
-                            // Entferne Query-Parameter für Formatprüfung
-                            const urlForCheck = imageUrl.split('?')[0];
-                            
-                            const absoluteUrl = new URL(imageUrl, url).href;
-                            if (formats.some(format => urlForCheck.toLowerCase().endsWith(format.toLowerCase()))) {
-                                // Qualitätsverbesserung für Fandom-Bilder
-                                if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
-                                    // Größere Bildversion anfordern
-                                    const enhancedUrl = absoluteUrl.replace(/\/scale-to-width-down\/\d+/, '/scale-to-width-down/800');
-                                    imageUrls.add(enhancedUrl);
-                                } else {
-                                    imageUrls.add(absoluteUrl);
-                                }
-                            }
-                        } catch (error) {
-                            console.warn('Ungültige Bild-URL:', match[1]);
-                        }
-                    }
-                }
-
-                // Zusätzlich nach modernen Bildformaten in source-Tags suchen
-                const sourceTags = doc.querySelectorAll('source');
-                sourceTags.forEach(source => {
+                // Direkte Bildsuche im DOM
+                const allImages = doc.querySelectorAll('img, source');
+                allImages.forEach(img => {
                     try {
-                        const srcset = source.getAttribute('srcset');
-                        const type = source.getAttribute('type');
-                        
-                        if (srcset && type && type.includes('webp') && formats.includes('.webp')) {
-                            srcset.split(',').forEach(src => {
-                                try {
-                                    const url = src.trim().split(' ')[0];
-                                    if (url) {
-                                        const absoluteUrl = new URL(url, window.location.href).href;
-                                        imageUrls.add(absoluteUrl);
-                                    }
-                                } catch (error) {
-                                    console.warn('Fehler beim Verarbeiten von srcset URL:', src);
-                                }
-                            });
-                        }
-                    } catch (error) {
-                        console.warn('Fehler beim Verarbeiten eines source Tags:', error);
-                    }
-                });
-
-                // Zusätzlich nach Fandom-spezifischen Bildcontainern suchen
-                const imageContainers = doc.querySelectorAll('.image, .thumb, .gallery-image, [data-image-key]');
-                imageContainers.forEach(container => {
-                    try {
-                        // Suche nach verschiedenen Bildquellen
-                        const sources = [
-                            container.querySelector('img'),
-                            container.querySelector('source'),
-                            container.dataset.imageKey && container
+                        // Alle möglichen Bildquellen sammeln
+                        const possibleUrls = [
+                            img.src,
+                            img.dataset.src,
+                            img.dataset.image,
+                            img.dataset.imageKey,
+                            img.currentSrc,
+                            img.srcset
                         ].filter(Boolean);
 
-                        sources.forEach(element => {
-                            let imageUrl = element.dataset.src || element.src || element.srcset || element.dataset.imageKey;
+                        // Srcset aufteilen, falls vorhanden
+                        if (img.srcset) {
+                            const srcsetUrls = img.srcset.split(',')
+                                .map(src => src.trim().split(' ')[0])
+                                .filter(Boolean);
+                            possibleUrls.push(...srcsetUrls);
+                        }
+
+                        possibleUrls.forEach(imageUrl => {
                             if (imageUrl) {
-                                if (imageUrl.startsWith('//')) {
-                                    imageUrl = 'https:' + imageUrl;
-                                }
-                                
-                                // Entferne Query-Parameter für Formatprüfung
-                                const urlForCheck = imageUrl.split('?')[0];
-                                
-                                const absoluteUrl = new URL(imageUrl, url).href;
-                                if (formats.some(format => urlForCheck.toLowerCase().endsWith(format.toLowerCase()))) {
-                                    if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
-                                        const enhancedUrl = absoluteUrl.replace(/\/scale-to-width-down\/\d+/, '/scale-to-width-down/800');
-                                        imageUrls.add(enhancedUrl);
-                                    } else {
-                                        imageUrls.add(absoluteUrl);
+                                try {
+                                    // URL bereinigen
+                                    if (imageUrl.startsWith('//')) {
+                                        imageUrl = 'https:' + imageUrl;
                                     }
+                                    
+                                    // Entferne Query-Parameter und hole Extension
+                                    const urlForCheck = imageUrl.split('?')[0].split('#')[0];
+                                    
+                                    // Prüfe auf gültige Bildformate
+                                    if (formats.some(format => {
+                                        // Entferne den Punkt vom Format für flexiblere Prüfung
+                                        const formatWithoutDot = format.replace('.', '');
+                                        return urlForCheck.toLowerCase().includes(`.${formatWithoutDot}`);
+                                    })) {
+                                        const absoluteUrl = new URL(imageUrl, url).href;
+                                        
+                                        // Qualitätsverbesserung für Fandom-Bilder
+                                        if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
+                                            // Größere Bildversion anfordern
+                                            const enhancedUrl = absoluteUrl
+                                                .replace(/\/scale-to-width-down\/\d+/, '/scale-to-width-down/800')
+                                                .replace(/\/revision\/latest\/scale-to-width-down\/\d+/, '/revision/latest');
+                                            imageUrls.add(enhancedUrl);
+                                        } else {
+                                            imageUrls.add(absoluteUrl);
+                                        }
+                                    }
+                                } catch (error) {
+                                    console.warn('Fehler bei der URL-Verarbeitung:', imageUrl, error);
                                 }
                             }
                         });
                     } catch (error) {
-                        console.warn('Fehler beim Verarbeiten eines Bildcontainers:', error);
+                        console.warn('Fehler bei der Bildverarbeitung:', error);
                     }
                 });
-                
-                if (imageUrls.size === 0) {
-                    throw new Error('Keine Bilder mit den ausgewählten Formaten auf der Website gefunden. Versuchen Sie es mit anderen Bildformaten (z.B. JPG oder PNG).');
+
+                // Suche nach Bildern in Hintergrund-Styles
+                const allElements = doc.getElementsByTagName('*');
+                for (const element of allElements) {
+                    try {
+                        const style = window.getComputedStyle(element);
+                        const backgroundImage = style.backgroundImage;
+                        if (backgroundImage && backgroundImage !== 'none') {
+                            const matches = backgroundImage.match(/url\(['"]?(.*?)['"]?\)/);
+                            if (matches && matches[1]) {
+                                let imageUrl = matches[1];
+                                if (imageUrl.startsWith('//')) {
+                                    imageUrl = 'https:' + imageUrl;
+                                }
+                                const urlForCheck = imageUrl.split('?')[0].split('#')[0];
+                                if (formats.some(format => {
+                                    const formatWithoutDot = format.replace('.', '');
+                                    return urlForCheck.toLowerCase().includes(`.${formatWithoutDot}`);
+                                })) {
+                                    const absoluteUrl = new URL(imageUrl, url).href;
+                                    imageUrls.add(absoluteUrl);
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.warn('Fehler bei der Hintergrundbildsuche:', error);
+                    }
                 }
-                
+
+                // Suche nach Bildern in data-Attributen
+                const dataImageElements = doc.querySelectorAll('[data-image], [data-src], [data-thumb]');
+                dataImageElements.forEach(element => {
+                    try {
+                        const dataUrls = [
+                            element.dataset.image,
+                            element.dataset.src,
+                            element.dataset.thumb
+                        ].filter(Boolean);
+
+                        dataUrls.forEach(imageUrl => {
+                            if (imageUrl) {
+                                if (imageUrl.startsWith('//')) {
+                                    imageUrl = 'https:' + imageUrl;
+                                }
+                                const urlForCheck = imageUrl.split('?')[0].split('#')[0];
+                                if (formats.some(format => {
+                                    const formatWithoutDot = format.replace('.', '');
+                                    return urlForCheck.toLowerCase().includes(`.${formatWithoutDot}`);
+                                })) {
+                                    const absoluteUrl = new URL(imageUrl, url).href;
+                                    imageUrls.add(absoluteUrl);
+                                }
+                            }
+                        });
+                    } catch (error) {
+                        console.warn('Fehler bei der Data-Attribut-Bildsuche:', error);
+                    }
+                });
+
+                if (imageUrls.size === 0) {
+                    throw new Error('Keine Bilder mit den ausgewählten Formaten gefunden. Versuchen Sie es mit anderen Bildformaten (z.B. JPG oder PNG).');
+                }
+
+                console.log('Gefundene Bilder:', Array.from(imageUrls));
                 return Array.from(imageUrls);
             } catch (error) {
                 if (error.message.includes('Keine Bilder')) {
