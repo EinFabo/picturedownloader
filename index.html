@@ -179,6 +179,9 @@
             'https://cors-anywhere.herokuapp.com/'
         ];
 
+        // Maximale Anzahl paralleler Downloads
+        const MAX_PARALLEL_DOWNLOADS = 5;
+
         async function tryFetch(url) {
             for (const proxy of CORS_PROXIES) {
                 try {
@@ -196,50 +199,27 @@
 
         async function fetchImages(url, formats) {
             try {
-                // HTML der Zielseite abrufen
                 const response = await tryFetch(url);
                 const html = await response.text();
                 
-                // HTML parsen
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, 'text/html');
                 
-                // Alle Bilder und Hintergrundbilder finden
                 const imageUrls = new Set();
                 
-                // <img> Tags durchsuchen
-                const images = doc.getElementsByTagName('img');
-                for (const img of images) {
-                    const imgUrl = img.src || img.getAttribute('src');
-                    if (imgUrl) {
-                        try {
-                            const absoluteUrl = new URL(imgUrl, url).href;
-                            if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
-                                imageUrls.add(absoluteUrl);
-                            }
-                        } catch (error) {
-                            console.warn('Ungültige Bild-URL:', imgUrl);
+                // Schnellere Bildsuche durch direkte URL-Extraktion
+                const htmlText = html.toLowerCase();
+                const urlRegex = /(?:src|href|content)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi;
+                let match;
+                
+                while ((match = urlRegex.exec(htmlText)) !== null) {
+                    try {
+                        const absoluteUrl = new URL(match[1], url).href;
+                        if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
+                            imageUrls.add(absoluteUrl);
                         }
-                    }
-                }
-
-                // CSS Hintergrundbilder suchen
-                const elements = doc.getElementsByTagName('*');
-                for (const element of elements) {
-                    const style = window.getComputedStyle(element);
-                    const backgroundImage = style.backgroundImage;
-                    if (backgroundImage && backgroundImage !== 'none') {
-                        const matches = backgroundImage.match(/url\(['"]?(.*?)['"]?\)/);
-                        if (matches && matches[1]) {
-                            try {
-                                const absoluteUrl = new URL(matches[1], url).href;
-                                if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
-                                    imageUrls.add(absoluteUrl);
-                                }
-                            } catch (error) {
-                                console.warn('Ungültige Hintergrundbild-URL:', matches[1]);
-                            }
-                        }
+                    } catch (error) {
+                        console.warn('Ungültige Bild-URL:', match[1]);
                     }
                 }
                 
@@ -266,30 +246,32 @@
             progressDiv.style.marginTop = '10px';
             document.getElementById('status').after(progressDiv);
             
-            // Bilder herunterladen und zum ZIP hinzufügen
-            for (let i = 0; i < imageUrls.length; i++) {
-                try {
-                    const url = imageUrls[i];
-                    progressDiv.textContent = `Lade Bild ${i + 1} von ${imageUrls.length}...`;
-                    
-                    const response = await tryFetch(url);
-                    const blob = await response.blob();
-                    
-                    // Dateiname aus URL extrahieren und säubern
-                    let fileName = url.split('/').pop() || `image_${i + 1}${getExtension(url)}`;
-                    fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                    
-                    zip.file(fileName, blob);
-                    successCount++;
-                } catch (error) {
-                    console.error(`Fehler beim Download von ${imageUrls[i]}:`, error);
-                    errors.push(imageUrls[i]);
-                }
+            // Bilder in Gruppen parallel herunterladen
+            for (let i = 0; i < imageUrls.length; i += MAX_PARALLEL_DOWNLOADS) {
+                const batch = imageUrls.slice(i, i + MAX_PARALLEL_DOWNLOADS);
+                const downloads = batch.map(async (url, batchIndex) => {
+                    try {
+                        progressDiv.textContent = `Lade Bilder ${i + 1} bis ${Math.min(i + MAX_PARALLEL_DOWNLOADS, imageUrls.length)} von ${imageUrls.length}...`;
+                        
+                        const response = await tryFetch(url);
+                        const blob = await response.blob();
+                        
+                        let fileName = url.split('/').pop() || `image_${i + batchIndex + 1}${getExtension(url)}`;
+                        fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                        
+                        zip.file(fileName, blob);
+                        successCount++;
+                    } catch (error) {
+                        console.error(`Fehler beim Download von ${url}:`, error);
+                        errors.push(url);
+                    }
+                });
+                
+                // Warte auf die aktuelle Batch
+                await Promise.all(downloads);
             }
             
-            // Fortschrittsanzeige entfernen
             progressDiv.remove();
-            
             return { zip, errors, successCount };
         }
 
@@ -316,24 +298,22 @@
                 return;
             }
 
-            // UI-Status aktualisieren
             statusDiv.style.display = 'none';
             loadingDiv.style.display = 'block';
             
             try {
-                // Bilder von der Website abrufen
                 const imageUrls = await fetchImages(url, formats);
-                
-                // ZIP-Datei erstellen
                 const { zip, errors, successCount } = await downloadImages(imageUrls);
                 
                 if (successCount === 0) {
                     throw new Error('Keine Bilder konnten heruntergeladen werden.');
                 }
                 
-                const blob = await zip.generateAsync({type: 'blob'});
+                const blob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'STORE', // Keine Kompression für schnelleres Packen
+                });
                 
-                // Download starten
                 const downloadUrl = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = downloadUrl;
