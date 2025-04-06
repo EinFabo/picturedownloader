@@ -207,24 +207,79 @@
                 
                 const imageUrls = new Set();
                 
-                // Schnellere Bildsuche durch direkte URL-Extraktion
+                // Erweiterte Bildsuche für verschiedene Bildquellen
+                const patterns = [
+                    // Standard Bild-Tags
+                    /(?:src|href|content)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
+                    // Data-Attribute (häufig bei Fandom/Wiki-Seiten)
+                    /data-(?:src|image|thumb|file)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
+                    // Fandom-spezifische Bildquellen
+                    /data-image-key=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi,
+                    // CSS Hintergrundbilder
+                    /url\(['"]?([^'"]+\.(?:jpg|jpeg|png|gif|webp))['"]?\)/gi
+                ];
+
                 const htmlText = html.toLowerCase();
-                const urlRegex = /(?:src|href|content)=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi;
-                let match;
                 
-                while ((match = urlRegex.exec(htmlText)) !== null) {
-                    try {
-                        const absoluteUrl = new URL(match[1], url).href;
-                        if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
-                            imageUrls.add(absoluteUrl);
+                // Alle Bildmuster durchsuchen
+                for (const pattern of patterns) {
+                    let match;
+                    while ((match = pattern.exec(htmlText)) !== null) {
+                        try {
+                            let imageUrl = match[1];
+                            
+                            // Fandom-spezifische URL-Anpassungen
+                            if (imageUrl.startsWith('//')) {
+                                imageUrl = 'https:' + imageUrl;
+                            }
+                            
+                            const absoluteUrl = new URL(imageUrl, url).href;
+                            if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
+                                // Qualitätsverbesserung für Fandom-Bilder
+                                if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
+                                    // Größere Bildversion anfordern
+                                    const enhancedUrl = absoluteUrl.replace(/\/scale-to-width-down\/\d+/, '/scale-to-width-down/800');
+                                    imageUrls.add(enhancedUrl);
+                                } else {
+                                    imageUrls.add(absoluteUrl);
+                                }
+                            }
+                        } catch (error) {
+                            console.warn('Ungültige Bild-URL:', match[1]);
                         }
-                    } catch (error) {
-                        console.warn('Ungültige Bild-URL:', match[1]);
                     }
                 }
+
+                // Zusätzlich nach Fandom-spezifischen Bildcontainern suchen
+                const imageContainers = doc.querySelectorAll('.image, .thumb, .gallery-image');
+                imageContainers.forEach(container => {
+                    try {
+                        const img = container.querySelector('img');
+                        if (img) {
+                            let imageUrl = img.dataset.src || img.src;
+                            if (imageUrl) {
+                                if (imageUrl.startsWith('//')) {
+                                    imageUrl = 'https:' + imageUrl;
+                                }
+                                const absoluteUrl = new URL(imageUrl, url).href;
+                                if (formats.some(format => absoluteUrl.toLowerCase().endsWith(format.toLowerCase()))) {
+                                    // Qualitätsverbesserung für Fandom-Bilder
+                                    if (absoluteUrl.includes('fandom.com') || absoluteUrl.includes('wikia.com')) {
+                                        const enhancedUrl = absoluteUrl.replace(/\/scale-to-width-down\/\d+/, '/scale-to-width-down/800');
+                                        imageUrls.add(enhancedUrl);
+                                    } else {
+                                        imageUrls.add(absoluteUrl);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.warn('Fehler beim Verarbeiten eines Bildcontainers:', error);
+                    }
+                });
                 
                 if (imageUrls.size === 0) {
-                    throw new Error('Keine Bilder mit den ausgewählten Formaten auf der Website gefunden.');
+                    throw new Error('Keine Bilder mit den ausgewählten Formaten auf der Website gefunden. Versuchen Sie es mit anderen Bildformaten (z.B. JPG oder PNG).');
                 }
                 
                 return Array.from(imageUrls);
