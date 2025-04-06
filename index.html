@@ -176,25 +176,45 @@
         const CORS_PROXIES = [
             'https://api.allorigins.win/raw?url=',
             'https://corsproxy.io/?',
-            'https://cors-anywhere.herokuapp.com/'
+            'https://api.codetabs.com/v1/proxy?quest=',
+            'https://cors-anywhere.herokuapp.com/',
+            'https://crossorigin.me/'
         ];
 
         // Maximale Anzahl paralleler Downloads
         const MAX_PARALLEL_DOWNLOADS = 5;
 
         async function tryFetch(url) {
+            let lastError = null;
             for (const proxy of CORS_PROXIES) {
                 try {
-                    const response = await fetch(proxy + encodeURIComponent(url));
+                    const proxyUrl = proxy + encodeURIComponent(url);
+                    console.log('Versuche Proxy:', proxy);
+                    
+                    const response = await fetch(proxyUrl);
                     if (response.ok) {
+                        console.log('Erfolgreicher Proxy:', proxy);
                         return response;
                     }
                 } catch (error) {
                     console.warn(`Proxy ${proxy} fehlgeschlagen:`, error);
+                    lastError = error;
                     continue;
                 }
             }
-            throw new Error('Keine der Proxy-Verbindungen war erfolgreich. Bitte versuchen Sie es später erneut.');
+            
+            // Versuche direkten Zugriff als letzte Option
+            try {
+                const response = await fetch(url);
+                if (response.ok) {
+                    return response;
+                }
+            } catch (error) {
+                console.warn('Direkter Zugriff fehlgeschlagen:', error);
+                lastError = error;
+            }
+
+            throw new Error(`Zugriff auf die Website nicht möglich. Bitte überprüfen Sie die URL oder versuchen Sie es später erneut. (${lastError?.message || 'Unbekannter Fehler'})`);
         }
 
         async function fetchImages(url, formats) {
